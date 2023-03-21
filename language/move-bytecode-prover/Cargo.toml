@@ -1,0 +1,16 @@
+[package]
+name = "move-bytecode-prover"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+move-ir-types = { path = "../move-ir/types" }
+move-command-line-common = { path = "../move-command-line-common" }
+move-compiler = { path = "../move-compiler" }
+move-binary-format = { path = "../move-binary-format" }
+move-symbol-pool = { path = "../move-symbol-pool" }
+move-core-types = { path = "../move-core/types" }
+move-bytecode-source-map = { path = "../move-ir-compiler/move-bytecode-source-map" }
+anyhow = "1.0.70"
