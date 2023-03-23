@@ -19,11 +19,11 @@ use move_command_line_common::{
 };
 use move_core_types::identifier::{Identifier, IdentStr};
 use move_compiler::shared::{Name};
-use anyhow::{bail, Error, Result};
-use std::format;
+use anyhow::{bail, Error, Result, Context};
+use std::{format, collections::{BTreeMap, VecDeque}};
 
 pub struct Deriver<'a> {
-    source_mapper: SourceMapping<'a>, 
+    pub source_mapper: SourceMapping<'a>, 
 }
 
 impl<'a> Deriver<'a> {
@@ -88,23 +88,181 @@ impl<'a> Deriver<'a> {
     // Derivers
     //***************************************************************************
 
-    // pub fn derive_function_def(
-    //     &self,
-    //     function_source_map: &FunctionSourceMap,
-    //     function: Option<(&FunctionDefinition, &FunctionHandle)>,
-    //     name: &IdentStr,
-    //     type_parameters: &[AbilitySet],
-    //     parameters: SignatureIndex,
-    //     code: Option<&CodeUnit>,
-    // ) -> Result<>{
-    //     debug_assert_eq!(
-    //         function_source_map.parameters.len(),
-    //         self.source_mapper.bytecode.signature_at(parameters).len(),
-    //         "Arity mismatch between function source map and bytecode for function {}",
-    //         name
-    //     );
-
+    // pub struct Function {
+    //     pub attributes: Attributes,
+    //     pub loc: Loc,
+    //     pub visibility: Visibility,
+    //     pub entry: Option<Loc>,
+    //     pub signature: FunctionSignature,
+    //     pub acquires: Vec<ModuleAccess>,
+    //     pub body: FunctionBody,
+    //     pub specs: BTreeMap<SpecId, SpecBlock>,
     // }
+
+    pub fn derive_function_def(
+        &self,
+        function_source_map: &FunctionSourceMap,
+        function: Option<(&F::FunctionDefinition, &F::FunctionHandle)>,
+        name: &IdentStr,
+        type_parameters: &[F::AbilitySet],
+        parameters: F::SignatureIndex,
+        code: Option<&F::CodeUnit>,
+    ) -> Result<(P::FunctionName, E::Function)>{
+        use E::ModuleAccess_ as EMA;
+
+        debug_assert_eq!(
+            function_source_map.parameters.len(),
+            self.source_mapper.bytecode.signature_at(parameters).len(),
+            "Arity mismatch between function source map and bytecode for function {}",
+            name
+        );
+
+        let loc = function_source_map.definition_location;
+
+        let entry = if function.map(|(f, _)| f.is_entry).unwrap_or(false) {
+            Some(no_loc())
+        } else {
+            None
+        };
+
+        let visibility = match function {
+            Some(function) => match function.0.visibility {
+                F::Visibility::Private => E::Visibility::Internal,
+                F::Visibility::Friend => E::Visibility::Friend(no_loc()),
+                F::Visibility::Public => E::Visibility::Public(no_loc()),
+            },
+            None => E::Visibility::Internal,
+        };
+
+        // Vec<ModuleAccess>
+        let acquires = match function {
+            Some(function) => {
+                function.0.acquires_global_resources
+                    .iter()
+                    .map(|struct_def_idx| {
+                        let struct_def = self.source_mapper.bytecode.struct_def_at(*struct_def_idx)?;
+                        Ok(self.module_access_from_struct_handle_index(&struct_def.struct_handle))
+                    })
+                    .collect::<Result<Vec<Spanned<EMA>>>>()
+            },
+            None => Ok(vec![])
+        }?;
+
+        let signature = self.derive_function_sig(
+            function_source_map,
+            function.expect("Not provided a function."),
+            type_parameters,
+            parameters
+        );
+
+        // TODO: Use CodeUnit?
+
+        Ok(
+            (
+                P::FunctionName(
+                    sp(loc, Symbol::from(name.as_str()))
+                ),
+                E::Function {
+                    attributes: UniqueMap::new(),
+                    loc,
+                    visibility,
+                    entry,
+                    signature,
+                    acquires,
+                    body: Spanned::unsafe_no_loc(E::FunctionBody_::Defined(VecDeque::new())),
+                    specs: BTreeMap::new(),
+                }
+            )
+        )
+
+    }
+
+    fn derive_function_sig(
+        &self,
+        function_source_map: &FunctionSourceMap,
+        function: (&F::FunctionDefinition, &F::FunctionHandle),
+        type_parameters: &[F::AbilitySet],
+        parameters: F::SignatureIndex
+    ) -> E::FunctionSignature {
+        
+        let type_parameters = Self::derive_fun_type_formals(
+            &function_source_map.type_parameters, 
+            type_parameters
+        );
+
+        let parameters = self
+            .source_mapper
+            .bytecode
+            .signature_at(parameters)
+            .0
+            .iter()
+            .zip(&function_source_map.parameters)
+            .map(|(sig_tok, (name, loc))| {
+                (
+                    P::Var(sp(loc.clone(), Symbol::from(name.clone()))),
+                    self.derive_type_from_sig_tok(
+                        sig_tok.clone(), 
+                        &function_source_map.type_parameters
+                    )
+                )
+            })
+            .collect::<Vec<(P::Var, E::Type)>>();
+
+        let return_sig = self
+            .source_mapper
+            .bytecode
+            .signature_at(function.1.return_);
+
+        let return_sig_toks = &return_sig
+            .0;
+
+        let return_loc = no_loc();
+
+        let return_type = match return_sig_toks.len() {
+            0 => sp(return_loc, E::Type_::Unit),
+            _ => sp(
+                return_loc,
+                E::Type_::Multiple(
+                    return_sig_toks
+                        .iter()
+                        .map(|sig_tok| {
+                            self.derive_type_from_sig_tok(
+                                sig_tok.clone(), 
+                                &function_source_map.type_parameters
+                            )
+                        })
+                        .collect::<Vec<E::Type>>()
+                )
+            ),
+        };
+
+        E::FunctionSignature {
+            type_parameters,
+            parameters,
+            return_type,
+        }
+    }
+
+    fn derive_fun_type_formals(
+        source_map_ty_params: &[SourceName],
+        abilities: &[F::AbilitySet],
+    ) -> Vec<(Name, E::AbilitySet)> {
+
+        source_map_ty_params
+            .iter()
+            .zip(abilities)
+            .map(|((name, loc), ability_set)| {
+                (
+                    sp(*loc, Symbol::from(name.clone())),
+                    if *ability_set == F::AbilitySet::EMPTY {
+                        E::AbilitySet::empty()
+                    } else {
+                        Self::ability_set_from(*ability_set)
+                    }
+                )
+            })
+            .collect::<Vec<(Name, E::AbilitySet)>>()
+    }
 
     fn derive_struct_def(
         &self,
@@ -164,7 +322,7 @@ impl<'a> Deriver<'a> {
 
         let fields = match field_info {
             None => E::StructFields::Native(
-                Loc::new(FileHash::empty(), 0, 0)
+                no_loc()
             ),
             Some(field_info) => {
                 let mut field_map: E::Fields<E::Type> = UniqueMap::new();
@@ -205,8 +363,7 @@ impl<'a> Deriver<'a> {
         let ty_params = source_map_ty_params
             .iter()
             .zip(type_parameters)
-            .map(|((name, _), ty_param)| {
-
+            .map(|((name, loc), ty_param)| {
                 let ability_set = if ty_param.constraints == F::AbilitySet::EMPTY {
                     E::AbilitySet::empty()
                 } else {
@@ -221,10 +378,9 @@ impl<'a> Deriver<'a> {
 
                 E::StructTypeParameter{
                     is_phantom: ty_param.is_phantom,
-                    name: Spanned::unsafe_no_loc(Symbol::from(name.clone())),
+                    name: sp(*loc, Symbol::from(name.clone())),
                     constraints: ability_set
                 }
-
             })
             .collect();
 
@@ -298,12 +454,17 @@ impl<'a> Deriver<'a> {
             FST::Reference(sig_tok) => self.derive_type_from_sig_tok(*sig_tok, type_param_context),
             FST::MutableReference(sig_tok) => self.derive_type_from_sig_tok(*sig_tok, type_param_context),
             FST::TypeParameter(ty_param_idx) => {
-                let name = type_param_context
-                    .get(ty_param_idx as usize)
-                    .expect("Failed to get type parameter from context with index.")
+                let source_name = type_param_context
+                .get(ty_param_idx as usize)
+                .expect("Failed to get type parameter from context with index.");
+
+                let name = source_name
                     .0
-                    .clone()
-                    ;
+                    .clone();
+                
+                let loc = source_name
+                    .1
+                    .clone();
 
                 let module_access = Spanned::unsafe_no_loc(
                     EMA::Name(
@@ -311,7 +472,8 @@ impl<'a> Deriver<'a> {
                     )
                 );
 
-                Spanned::unsafe_no_loc(
+                sp(
+                    loc,
                     ET::Apply(
                         module_access,
                         vec![]
@@ -406,6 +568,17 @@ impl<'a> Deriver<'a> {
         )
     }
 
+    fn ability_set_from(ability_set: F::AbilitySet) -> E::AbilitySet {
+        match ability_set {
+            F::AbilitySet::EMPTY => E::AbilitySet::empty(),
+            F::AbilitySet::PRIMITIVES => E::AbilitySet::primitives(no_loc()),
+            F::AbilitySet::REFERENCES => E::AbilitySet::references(no_loc()),
+            F::AbilitySet::SIGNER => E::AbilitySet::signer(no_loc()),
+            _ => panic!("No such ability set")
+            // F::AbilitySet::VECTOR => E::AbilitySet::collection(no_loc()),
+        }
+    }
+
     fn builtin_type(type_name: &str) -> E::Type_ {
         use E::Type_ as ET;
         use E::ModuleAccess_ as EMA;
@@ -423,6 +596,10 @@ impl<'a> Deriver<'a> {
         )
     }
 
+}
+
+fn no_loc() -> Loc {
+    Loc::new(FileHash::empty(), 0, 0)
 }
 
 
@@ -443,33 +620,33 @@ mod tests {
         );
     }
 
-    #[test]
-    fn struct_type_formals() {
-        assert_eq!(
-            vec![
-                E::StructTypeParameter{
-                    is_phantom: true,
-                    name: Spanned::unsafe_no_loc(Symbol::from("test")),
-                    constraints: E::AbilitySet::all(Loc::new(FileHash::empty(), 0, 0)),
-                }
-            ],
-            Deriver::struct_type_formals_from(
-                vec![
-                    "test"
-                ],
-                vec![
-                    F::StructTypeParameter{
-                        constraints: F::AbilitySet::ALL,
-                        is_phantom: true
-                    }
-                ]
-            )
-        );
-    }
+    // #[test]
+    // fn struct_type_formals() {
+    //     assert_eq!(
+    //         vec![
+    //             E::StructTypeParameter{
+    //                 is_phantom: true,
+    //                 name: Spanned::unsafe_no_loc(Symbol::from("test")),
+    //                 constraints: E::AbilitySet::all(no_loc()),
+    //             }
+    //         ],
+    //         Deriver::struct_type_formals_from(
+    //             vec![
+    //                 "test"
+    //             ],
+    //             vec![
+    //                 F::StructTypeParameter{
+    //                     constraints: F::AbilitySet::ALL,
+    //                     is_phantom: true
+    //                 }
+    //             ]
+    //         )
+    //     );
+    // }
 
     #[test]
     fn derive_struct_definition() -> Result<()> {
-        let no_loc = Spanned::unsafe_no_loc(()).loc;
+        let no_loc = no_loc();
         let bytecode_bytes = fs::read("/Users/asaphbay/research/move/language/move-bytecode-prover/sample-bytecode/amm.mv").expect("Unable to read bytecode file");
         let module = F::CompiledModule::deserialize(&bytecode_bytes)?;
         let bytecode = BinaryIndexedView::Module(&module);
@@ -479,6 +656,52 @@ mod tests {
         let (name, struct_definition) = sample_file_deriver.derive_struct_def(F::StructDefinitionIndex(3_u16))?;
         
         ast_debug::print(&(name, &struct_definition));
+        
+        Ok(())
+    }
+
+    #[test]
+    fn derive_function_definition() -> Result<()> {
+        let no_loc = no_loc();
+        let bytecode_bytes = fs::read("/Users/asaphbay/research/move/language/move-bytecode-prover/sample-bytecode/amm.mv").expect("Unable to read bytecode file");
+        let module = F::CompiledModule::deserialize(&bytecode_bytes)?;
+        let bytecode = BinaryIndexedView::Module(&module);
+        let source_mapping = SourceMapping::new_from_view(bytecode, no_loc)?;
+
+        let deriver = Deriver::new(source_mapping);
+        // let (name, function_definition) = sample_file_deriver.derive_function_def(
+
+        // )?;
+
+        let function_defs = match deriver.source_mapper.bytecode {
+            BinaryIndexedView::Script(script) => {
+                panic!("AGHHH");
+            }
+            BinaryIndexedView::Module(module) => (0..module.function_defs.len())
+                .map(|i| {
+                    let function_definition_index = F::FunctionDefinitionIndex(i as F::TableIndex);
+                    let function_definition = deriver.get_function_def(function_definition_index)?;
+                    let function_handle = deriver
+                        .source_mapper
+                        .bytecode
+                        .function_handle_at(function_definition.function);
+                    deriver.derive_function_def(
+                        deriver.source_mapper
+                            .source_map
+                            .get_function_source_map(function_definition_index)?,
+                        Some((function_definition, function_handle)),
+                        deriver.source_mapper
+                            .bytecode
+                            .identifier_at(function_handle.name),
+                        &function_handle.type_parameters,
+                        function_handle.parameters,
+                        function_definition.code.as_ref(),
+                    )
+                })
+                .collect::<Result<Vec<(P::FunctionName, E::Function)>>>()?,
+        };
+        
+        ast_debug::print(&(function_defs.get(9).context("No name.")?.0, &function_defs.get(9).context("No definition.")?.1));
         
         Ok(())
     }

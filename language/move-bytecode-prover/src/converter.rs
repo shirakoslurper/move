@@ -62,8 +62,6 @@ use move_compiler::shared::{Name};
 //                     let symbol = env.symbol_pool().make(name.as_str());
 //                     struct_fields.add(
 //                         P::Field(
-//                             sp( , symbol);
-
 //                             // location::Loc does not have a default while model::loc does.
 //                             // the Loc used here is location::Loc
 //                             Spanned::new(
