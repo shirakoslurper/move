@@ -2,7 +2,7 @@ use move_bytecode_source_map::{
     mapping::SourceMapping,
     source_map::{FunctionSourceMap, SourceName},
 };
-use move_binary_format::{file_format as F, access::ModuleAccess};
+use move_binary_format::{file_format as F, access::ModuleAccess, constant};
 // use move_model::ast as M;
 use move_compiler::shared::{
     unique_map::UniqueMap,
@@ -15,12 +15,14 @@ use move_symbol_pool::Symbol;
 use move_command_line_common::{
     files::FileHash,
     address::NumericalAddress,
-    parser::NumberFormat
+    parser::NumberFormat, values
 };
 use move_core_types::identifier::{Identifier, IdentStr};
 use move_compiler::shared::{Name};
 use anyhow::{bail, Error, Result, Context};
 use std::{format, collections::{BTreeMap, VecDeque}};
+
+use crate::values_impl;
 
 pub struct Deriver<'a> {
     pub source_mapper: SourceMapping<'a>, 
@@ -88,6 +90,86 @@ impl<'a> Deriver<'a> {
     // Derivers
     //***************************************************************************
 
+    // pub struct Constant {
+    //     pub attributes: Attributes,
+    //     pub loc: Loc,
+    //     pub signature: Type,
+    //     pub value: Exp,
+    // }
+
+    pub fn derive_constants(&self) -> Result<Vec<(P::ConstantName, E::Constant)>> {
+        self
+            .source_mapper
+            .source_map
+            .constant_map
+            .iter()
+            .map(|(name, table_idx)| {
+                let name = P::ConstantName(
+                    Spanned::unsafe_no_loc(name.0)
+                );
+
+                let constant =  self
+                    .source_mapper
+                    .bytecode
+                    .constant_at(F::ConstantPoolIndex(table_idx.clone()));
+
+                Ok((name, self.derive_constant(constant)?))
+            })
+            .collect::<Result<Vec<(P::ConstantName, E::Constant)>>>()
+    }
+
+    pub fn derive_constant(&self, constant: &F::Constant) -> Result<E::Constant> {
+        Ok(
+            E::Constant {
+                attributes: UniqueMap::new(),
+                loc: no_loc(),
+                signature: self.derive_type_from_sig_tok(
+                    constant.type_.clone(),
+                    &[]),
+                value: Spanned::unsafe_no_loc(
+                    E::Exp_::Value(
+                        values_impl::Value::deserialize_constant(constant).context("Failed")?
+                    )
+                )
+            }
+        )
+    }
+
+    // Returns the deserialized value wrapped in the
+    // Val_ variant that corresponds to the type.
+    // F::SignatureToken is more expressive
+    // at a higher level than E::Type_.
+    // pub fn derive_constant_value(constant_type: F::SignatureToken, value: &Vec<u8>) -> E::Exp {
+    //     use F::SignatureToken as FST;
+    //     use E::Value_ as EV;
+
+    //     Spanned::unsafe_no_loc(
+    //         E::Exp_::Value(
+    //             match constant_type {
+    //                 FST::Address => Spanned::unsafe_no_loc(EV::Address(
+    //                     E::Address::Numerical(
+    //                         None,
+    //                         Spanned::unsafe_no_loc(
+    //                             NumericalAddress::new(value[..16], NumberFormat::Hex)
+    //                         )
+    //                     )
+    //                 )),
+    //                 FST::U8 => Spanned::unsafe_no_loc(EV::U8(
+    //                     values_impl::
+    //                 )),
+    //                 FST::U16 => Spanned::unsafe_no_loc(EV::U16(bcs::from_bytes(value))),
+    //                 FST::U32 => Spanned::unsafe_no_loc(EV::U32(bcs::from_bytes(value))),
+    //                 FST::U64 => Spanned::unsafe_no_loc(EV::U64(bcs::from_bytes(value))),
+    //                 FST::U128 => Spanned::unsafe_no_loc(EV::U128(bcs::from_bytes(value))),
+    //                 FST::U256 => Spanned::unsafe_no_loc(EV::U256(move_core_types::u256::U256::from_le_bytes(value))),
+    //                 FST::Bool => Spanned::unsafe_no_loc(EV::Bool(bcs::from_bytes(value))),
+    //                 _ => Spanned::unsafe_no_loc(EV::Bytearray(value.clone()))
+    //             }
+    //         )
+    //     )
+    // }
+
+
     // pub struct Function {
     //     pub attributes: Attributes,
     //     pub loc: Loc,
@@ -106,7 +188,7 @@ impl<'a> Deriver<'a> {
         name: &IdentStr,
         type_parameters: &[F::AbilitySet],
         parameters: F::SignatureIndex,
-        code: Option<&F::CodeUnit>,
+        code: Option<&F::CodeUnit>, // Not using atm
     ) -> Result<(P::FunctionName, E::Function)>{
         use E::ModuleAccess_ as EMA;
 
@@ -483,35 +565,6 @@ impl<'a> Deriver<'a> {
         }
     }
 
-    fn struct_type_formals_from(names: Vec<&str>, compiled_ty_params: Vec<F::StructTypeParameter>) -> Vec<E::StructTypeParameter>{
-        assert_eq!(names.len(), compiled_ty_params.len(), "Lengths of names and compiled type parameters do not match");
-        names
-            .iter()
-            .zip(compiled_ty_params)
-            .map(|(name, ty_param)| {
-
-                let ability_set = if ty_param.constraints == F::AbilitySet::EMPTY {
-                    E::AbilitySet::empty()
-                } else {
-                    let abilities = ty_param
-                        .constraints
-                        .into_iter()
-                        .map(Self::ability_from)
-                        .collect::<Vec<P::Ability>>();
-
-                    E::AbilitySet::from_abilities(abilities).expect("Failed to make ability set.")
-                };
-
-                E::StructTypeParameter{
-                    is_phantom: ty_param.is_phantom,
-                    name: Spanned::unsafe_no_loc(Symbol::from(name.clone())),
-                    constraints: ability_set
-                }
-
-            })
-            .collect()
-    }
-
     // Helpers
 
     fn module_access_from_struct_handle_index(
@@ -619,30 +672,6 @@ mod tests {
             Deriver::ability_from(F::Ability::Copy)
         );
     }
-
-    // #[test]
-    // fn struct_type_formals() {
-    //     assert_eq!(
-    //         vec![
-    //             E::StructTypeParameter{
-    //                 is_phantom: true,
-    //                 name: Spanned::unsafe_no_loc(Symbol::from("test")),
-    //                 constraints: E::AbilitySet::all(no_loc()),
-    //             }
-    //         ],
-    //         Deriver::struct_type_formals_from(
-    //             vec![
-    //                 "test"
-    //             ],
-    //             vec![
-    //                 F::StructTypeParameter{
-    //                     constraints: F::AbilitySet::ALL,
-    //                     is_phantom: true
-    //                 }
-    //             ]
-    //         )
-    //     );
-    // }
 
     #[test]
     fn derive_struct_definition() -> Result<()> {
