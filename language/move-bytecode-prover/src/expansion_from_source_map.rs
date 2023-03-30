@@ -118,6 +118,10 @@ impl<'a> Deriver<'a> {
             .collect::<Result<Vec<(P::ConstantName, E::Constant)>>>()
     }
 
+    // Instead of deriving the values separately (constant.data), we derive the 
+    // values from the whole constant as TypeSignature information
+    // provides extra robustness when it comes to serialization/deserialization.
+
     pub fn derive_constant(&self, constant: &F::Constant) -> Result<E::Constant> {
         Ok(
             E::Constant {
@@ -128,47 +132,12 @@ impl<'a> Deriver<'a> {
                     &[]),
                 value: Spanned::unsafe_no_loc(
                     E::Exp_::Value(
-                        values_impl::Value::deserialize_constant(constant).context("Failed")?
+                        values_impl::deserialize_constant(constant).context("Failed")?
                     )
                 )
             }
         )
     }
-
-    // Returns the deserialized value wrapped in the
-    // Val_ variant that corresponds to the type.
-    // F::SignatureToken is more expressive
-    // at a higher level than E::Type_.
-    // pub fn derive_constant_value(constant_type: F::SignatureToken, value: &Vec<u8>) -> E::Exp {
-    //     use F::SignatureToken as FST;
-    //     use E::Value_ as EV;
-
-    //     Spanned::unsafe_no_loc(
-    //         E::Exp_::Value(
-    //             match constant_type {
-    //                 FST::Address => Spanned::unsafe_no_loc(EV::Address(
-    //                     E::Address::Numerical(
-    //                         None,
-    //                         Spanned::unsafe_no_loc(
-    //                             NumericalAddress::new(value[..16], NumberFormat::Hex)
-    //                         )
-    //                     )
-    //                 )),
-    //                 FST::U8 => Spanned::unsafe_no_loc(EV::U8(
-    //                     values_impl::
-    //                 )),
-    //                 FST::U16 => Spanned::unsafe_no_loc(EV::U16(bcs::from_bytes(value))),
-    //                 FST::U32 => Spanned::unsafe_no_loc(EV::U32(bcs::from_bytes(value))),
-    //                 FST::U64 => Spanned::unsafe_no_loc(EV::U64(bcs::from_bytes(value))),
-    //                 FST::U128 => Spanned::unsafe_no_loc(EV::U128(bcs::from_bytes(value))),
-    //                 FST::U256 => Spanned::unsafe_no_loc(EV::U256(move_core_types::u256::U256::from_le_bytes(value))),
-    //                 FST::Bool => Spanned::unsafe_no_loc(EV::Bool(bcs::from_bytes(value))),
-    //                 _ => Spanned::unsafe_no_loc(EV::Bytearray(value.clone()))
-    //             }
-    //         )
-    //     )
-    // }
-
 
     // pub struct Function {
     //     pub attributes: Attributes,
@@ -674,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_struct_definition() -> Result<()> {
+    fn derive_struct_definition_test() -> Result<()> {
         let no_loc = no_loc();
         let bytecode_bytes = fs::read("/Users/asaphbay/research/move/language/move-bytecode-prover/sample-bytecode/amm.mv").expect("Unable to read bytecode file");
         let module = F::CompiledModule::deserialize(&bytecode_bytes)?;
@@ -690,7 +659,7 @@ mod tests {
     }
 
     #[test]
-    fn derive_function_definition() -> Result<()> {
+    fn derive_function_definition_test() -> Result<()> {
         let no_loc = no_loc();
         let bytecode_bytes = fs::read("/Users/asaphbay/research/move/language/move-bytecode-prover/sample-bytecode/amm.mv").expect("Unable to read bytecode file");
         let module = F::CompiledModule::deserialize(&bytecode_bytes)?;
@@ -698,9 +667,6 @@ mod tests {
         let source_mapping = SourceMapping::new_from_view(bytecode, no_loc)?;
 
         let deriver = Deriver::new(source_mapping);
-        // let (name, function_definition) = sample_file_deriver.derive_function_def(
-
-        // )?;
 
         let function_defs = match deriver.source_mapper.bytecode {
             BinaryIndexedView::Script(script) => {
@@ -732,6 +698,36 @@ mod tests {
         
         ast_debug::print(&(function_defs.get(9).context("No name.")?.0, &function_defs.get(9).context("No definition.")?.1));
         
+        Ok(())
+    }
+
+    #[test]
+    fn derive_constants_test() -> Result<()> {
+        let no_loc = no_loc();
+        let bytecode_bytes = fs::read("/Users/asaphbay/research/move/language/move-bytecode-prover/sample-bytecode/amm.mv").expect("Unable to read bytecode file");
+        let module = F::CompiledModule::deserialize(&bytecode_bytes)?;
+        let bytecode = BinaryIndexedView::Module(&module);
+        let source_mapping = SourceMapping::new_from_view(bytecode, no_loc)?;
+
+        let deriver = Deriver::new(source_mapping);
+
+        println!("Number of constants: {}", deriver.source_mapper.source_map.constant_map.keys().len());
+
+        // for (name, table_idx) in deriver.source_mapper.source_map.constant_map.iter() {
+        //     println!("{:#?}: {:#?}", 
+        //     name,
+        //     deriver
+        //         .source_mapper
+        //         .bytecode
+        //         .constant_at(F::ConstantPoolIndex(table_idx.clone())));
+        // }
+
+        let constants = deriver.derive_constants()?;
+
+        for (name, constant) in constants {
+            ast_debug::print(&(name, &constant));
+        }
+
         Ok(())
     }
 
