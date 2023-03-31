@@ -2,7 +2,7 @@ use move_bytecode_source_map::{
     mapping::SourceMapping,
     source_map::{FunctionSourceMap, SourceName},
 };
-use move_binary_format::{file_format as F, access::ModuleAccess, constant};
+use move_binary_format::{file_format as F, access::ModuleAccess, constant, binary_views::BinaryIndexedView};
 // use move_model::ast as M;
 use move_compiler::shared::{
     unique_map::UniqueMap,
@@ -20,9 +20,14 @@ use move_command_line_common::{
 use move_core_types::identifier::{Identifier, IdentStr};
 use move_compiler::shared::{Name};
 use anyhow::{bail, Error, Result, Context};
-use std::{format, collections::{BTreeMap, VecDeque}};
+use std::{format, collections::{BTreeMap, BTreeSet, VecDeque}};
 
 use crate::values_impl;
+
+pub enum Derived {
+    Module(E::ModuleDefinition),
+    Script(E::Script),
+}
 
 pub struct Deriver<'a> {
     pub source_mapper: SourceMapping<'a>, 
@@ -90,6 +95,188 @@ impl<'a> Deriver<'a> {
     // Derivers
     //***************************************************************************
 
+    // pub struct ModuleDefinition {
+    //     // package name metadata from compiler arguments, not used for any language rules
+    //     pub package_name: Option<Symbol>,
+    //     pub attributes: Attributes,
+    //     pub loc: Loc,
+    //     pub is_source_module: bool,
+    //     /// `dependency_order` is the topological order/rank in the dependency graph.
+    //     /// `dependency_order` is initialized at `0` and set in the uses pass
+    //     pub dependency_order: usize,
+    //     pub immediate_neighbors: UniqueMap<ModuleIdent, Neighbor>,
+    //     pub used_addresses: BTreeSet<Address>,
+    //     pub friends: UniqueMap<ModuleIdent, Friend>,
+    //     pub structs: UniqueMap<StructName, StructDefinition>,
+    //     pub functions: UniqueMap<FunctionName, Function>,
+    //     pub constants: UniqueMap<ConstantName, Constant>,
+    //     pub specs: Vec<SpecBlock>,
+    // }
+
+    // TODO: Return script as E::Script in a 
+
+    pub fn derive(&self) -> Result<Derived> {
+
+        let vec_structs = (0..self
+            .source_mapper
+            .bytecode
+            .struct_defs()
+            .map_or(0, |d| d.len()))
+            .map(|i| self.derive_struct_def(F::StructDefinitionIndex(i as F::TableIndex)))
+            .collect::<Result<Vec<(P::StructName, E::StructDefinition)>>>()?;
+
+        let mut structs = UniqueMap::new();
+
+        for (struct_name, struct_def) in vec_structs {
+            structs.add(struct_name, struct_def);
+        }
+
+        let vec_functions = match self.source_mapper.bytecode {
+            BinaryIndexedView::Script(script) => {
+                vec![self.derive_function_def(
+                    self.source_mapper
+                        .source_map
+                        .get_function_source_map(F::FunctionDefinitionIndex(0_u16))?,
+                        None,
+                        IdentStr::new("main")?,
+                        &script.type_parameters,
+                        script.parameters,
+                        Some(&script.code)
+                )?]
+            },
+            BinaryIndexedView::Module(module) => {
+                (0..module.function_defs.len())
+                    .map(|i| {
+                        let function_definition_index = F::FunctionDefinitionIndex(i as F::TableIndex);
+                        let function_definition = self.get_function_def(function_definition_index)?;
+                        let function_handle = self
+                            .source_mapper
+                            .bytecode
+                            .function_handle_at(function_definition.function);
+                        self.derive_function_def(
+                            self.source_mapper
+                                .source_map
+                                .get_function_source_map(function_definition_index)?,
+                                Some((function_definition, function_handle)),
+                                self.source_mapper
+                                    .bytecode.identifier_at(function_handle.name),
+                                    &function_handle.type_parameters,
+                                    function_handle.parameters,
+                                    function_definition.code.as_ref(),
+                        )
+                    })
+                    .collect::<Result<Vec<(P::FunctionName, E::Function)>>>()?
+            }
+        };
+
+        let mut functions = UniqueMap::new();
+
+        for (function_name, function_def) in vec_functions {
+            functions.add(function_name, function_def);
+        }
+
+        Ok(
+            match self.source_mapper.bytecode {
+                BinaryIndexedView::Script(_) => {
+                    let function = functions
+                        .into_iter()
+                        .collect::<Vec<(P::FunctionName, E::Function)>>()
+                        [0]
+                        .clone();
+                    Derived::Script(
+                        E::Script {
+                            package_name: None,
+                            attributes: UniqueMap::new(),
+                            loc: no_loc(),
+                            immediate_neighbors: UniqueMap::new(),
+                            used_addresses: self.derive_addresses()?,
+                            constants: self.derive_constants()?,
+                            function_name: function.0,
+                            function: function.1,
+                            specs: vec![]
+                        }
+                    )
+                },
+                BinaryIndexedView::Module(_) => Derived::Module(
+                    E::ModuleDefinition {
+                        package_name: None,
+                        attributes: UniqueMap::new(),
+                        loc: no_loc(),
+                        is_source_module: true,
+                        dependency_order: 0,
+                        immediate_neighbors: UniqueMap::new(),
+                        used_addresses: self.derive_addresses()?,
+                        friends: self.derive_friends()?,
+                        structs,
+                        functions,
+                        constants: self.derive_constants()?,
+                        specs: vec![]
+                    }
+                )
+            }
+        )
+    }
+
+    pub fn derive_addresses(&self) -> Result<BTreeSet<E::Address>> {
+        Ok(
+            self
+            .source_mapper
+            .bytecode
+            .address_identifiers()
+            .iter()
+            .map(|account_address| {
+                E::Address::Numerical(
+                    None,
+                    Spanned::unsafe_no_loc(
+                        NumericalAddress::new((*account_address).into_bytes(), NumberFormat::Hex)
+                    )
+                )
+            })
+            .collect::<BTreeSet<E::Address>>()
+        )
+    }
+
+    pub fn derive_friends(&self) -> Result<UniqueMap<E::ModuleIdent, E::Friend>> {
+        Ok(
+            match self
+                .source_mapper
+                .bytecode
+                .friend_decls() {
+                    Some(module_handles) => {
+                        let vec_friends = module_handles
+                            .iter()
+                            .map(|module_handle| {
+                                self.derive_friend(module_handle)
+                            })
+                            .collect::<Vec<(E::ModuleIdent, E::Friend)>>();
+
+                        let mut friends = UniqueMap::new();
+                        for (module_ident, friend) in vec_friends {
+                            if let Err(_) = friends.add(module_ident, friend) {
+                                panic!("Failed field insertion into field map.");
+                            }
+                        }
+                        friends
+                    },
+                    None => UniqueMap::new(),
+                }
+            )
+    }
+
+    pub fn derive_friend(
+        &self,
+        module_handle: &F::ModuleHandle
+    ) -> (E::ModuleIdent, E::Friend) {
+        let module_ident = self.module_ident_from_module_handle(module_handle);
+        (
+            module_ident,
+            E::Friend{
+                attributes: UniqueMap::new(),
+                loc: no_loc(),
+            }
+        )
+    }
+
     // pub struct Constant {
     //     pub attributes: Attributes,
     //     pub loc: Loc,
@@ -97,8 +284,10 @@ impl<'a> Deriver<'a> {
     //     pub value: Exp,
     // }
 
-    pub fn derive_constants(&self) -> Result<Vec<(P::ConstantName, E::Constant)>> {
-        self
+    // TODO: Return UniqueMap instead?
+
+    pub fn derive_constants(&self) -> Result<UniqueMap<P::ConstantName, E::Constant>> {
+        let vec_constants = self
             .source_mapper
             .source_map
             .constant_map
@@ -115,7 +304,17 @@ impl<'a> Deriver<'a> {
 
                 Ok((name, self.derive_constant(constant)?))
             })
-            .collect::<Result<Vec<(P::ConstantName, E::Constant)>>>()
+            .collect::<Result<Vec<(P::ConstantName, E::Constant)>>>()?;
+
+        let mut constants: UniqueMap<P::ConstantName, E::Constant> = UniqueMap::new();
+
+        for (constant_name, constant) in vec_constants {
+            if let Err(_) = constants.add(constant_name, constant) {
+                panic!("Failed field insertion into field map.");
+            }
+        }
+
+        Ok(constants)
     }
 
     // Instead of deriving the values separately (constant.data), we derive the 
@@ -384,7 +583,7 @@ impl<'a> Deriver<'a> {
                         ),
                         (idx, self.derive_type_from_sig_tok(ty_sig.0.clone(), &struct_source_map.type_parameters))
                     ) {
-                        panic!("Failed field inserttion into field map.");
+                        panic!("Failed field insertion into field map.");
                     };
                 };
                 E::StructFields::Defined(field_map)
@@ -534,7 +733,10 @@ impl<'a> Deriver<'a> {
         }
     }
 
+    //***************************************************************************
     // Helpers
+    //***************************************************************************
+
 
     fn module_access_from_struct_handle_index(
         &self,
@@ -546,6 +748,24 @@ impl<'a> Deriver<'a> {
 
         // expansion::ast::ModuleIdentifier
         let module_handle = self.source_mapper.bytecode.module_handle_at(struct_handle.module);
+        let module_ident = self
+            .module_ident_from_module_handle(module_handle);
+        
+        // Name (of the struct)
+        let struct_identifier = self.source_mapper.bytecode.identifier_at(struct_handle.name);
+        let struct_name = Spanned::unsafe_no_loc(
+            Symbol::from(struct_identifier.as_str())
+        );
+
+        Spanned::unsafe_no_loc(
+            EMA::ModuleAccess(module_ident, struct_name)
+        )
+    }
+
+    pub fn module_ident_from_module_handle(
+        &self, 
+        module_handle: &F::ModuleHandle
+    ) -> E::ModuleIdent {
         let module_identifier = self.source_mapper.bytecode.identifier_at(module_handle.name);
 
         let module_account_address = self.source_mapper.bytecode.address_identifier_at(module_handle.address);
@@ -557,7 +777,7 @@ impl<'a> Deriver<'a> {
             )
         );
 
-        let module_ident = Spanned::unsafe_no_loc(
+        Spanned::unsafe_no_loc(
             E::ModuleIdent_{
                 address: module_address,
                 module: P::ModuleName(
@@ -566,16 +786,6 @@ impl<'a> Deriver<'a> {
                     )
                 )
             }
-        );
-        
-        // Name (of the struct)
-        let struct_identifier = self.source_mapper.bytecode.identifier_at(struct_handle.name);
-        let struct_name = Spanned::unsafe_no_loc(
-            Symbol::from(struct_identifier.as_str())
-        );
-
-        Spanned::unsafe_no_loc(
-            EMA::ModuleAccess(module_ident, struct_name)
         )
     }
 
@@ -600,6 +810,14 @@ impl<'a> Deriver<'a> {
             // F::AbilitySet::VECTOR => E::AbilitySet::collection(no_loc()),
         }
     }
+
+    // TODO: Refactor to make E::Account from AccountAddress
+
+    // fn address_from_account_address(
+    //     account_address: &AccountAddress
+    // ) -> E::Address {
+
+    // }
 
     fn builtin_type(type_name: &str) -> E::Type_ {
         use E::Type_ as ET;
@@ -731,4 +949,63 @@ mod tests {
         Ok(())
     }
 
-}
+    #[test]
+    fn derive_friends_test() -> Result<()> {
+        let no_loc = no_loc();
+        let bytecode_bytes = fs::read("/Users/asaphbay/research/move/language/move-bytecode-prover/sample-bytecode/downloaded_clob_market.mv").expect("Unable to read bytecode file");
+        let module = F::CompiledModule::deserialize(&bytecode_bytes)?;
+        let bytecode = BinaryIndexedView::Module(&module);
+        let source_mapping = SourceMapping::new_from_view(bytecode, no_loc)?;
+
+        let deriver = Deriver::new(source_mapping);
+
+        let friends = deriver.derive_friends()?;
+
+        println!("Number of Friends: {}", friends.iter().map(|x| 1).collect::<Vec<i32>>().len());
+
+        for (_, module_ident, friend) in friends.iter() {
+            println!("Friend: ({:#?}, {:#?})", module_ident, friend);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn derive_addresses() -> Result<()> {
+        let no_loc = no_loc();
+        let bytecode_bytes = fs::read("/Users/asaphbay/research/move/language/move-bytecode-prover/sample-bytecode/downloaded_clob_market.mv").expect("Unable to read bytecode file");
+        let module = F::CompiledModule::deserialize(&bytecode_bytes)?;
+        let bytecode = BinaryIndexedView::Module(&module);
+        let source_mapping = SourceMapping::new_from_view(bytecode, no_loc)?;
+
+        let deriver = Deriver::new(source_mapping);
+
+        let addresses = deriver.derive_addresses()?;
+
+        println!("Number of addresses: {:#?}", addresses.len());
+
+        for address in addresses {
+            println!("    Address: {:#?} ", address);
+        }
+
+        Ok(())
+    }
+
+    #[test] 
+    fn derive_test() -> Result<()> {
+        let no_loc = no_loc();
+        let bytecode_bytes = fs::read("/Users/asaphbay/research/move/language/move-bytecode-prover/sample-bytecode/downloaded_clob_market.mv").expect("Unable to read bytecode file");
+        let module = F::CompiledModule::deserialize(&bytecode_bytes)?;
+        let bytecode = BinaryIndexedView::Module(&module);
+        let source_mapping = SourceMapping::new_from_view(bytecode, no_loc)?;
+
+        let deriver = Deriver::new(source_mapping);
+
+        match deriver.derive()? {
+            Derived::Script(script) => ast_debug::print(&script),
+            Derived::Module(module) => ast_debug::print(&module),
+        }
+
+        Ok(())
+    }
+ }
