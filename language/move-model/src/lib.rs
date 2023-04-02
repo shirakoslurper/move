@@ -49,7 +49,7 @@ use crate::{
 };
 
 pub mod ast;
-mod builder;
+pub mod builder;
 pub mod code_writer;
 pub mod exp_generator;
 pub mod exp_rewriter;
@@ -600,7 +600,7 @@ fn run_spec_checker(env: &mut GlobalEnv, units: Vec<AnnotatedCompiledUnit>, mut 
     run_spec_simplifier(env);
 }
 
-fn run_spec_simplifier(env: &mut GlobalEnv) {
+pub fn run_spec_simplifier(env: &mut GlobalEnv) {
     let options = env
         .get_extension::<ModelBuilderOptions>()
         .expect("options for model builder");

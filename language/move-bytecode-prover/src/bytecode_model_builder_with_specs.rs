@@ -1,8 +1,13 @@
 use std::collections::BTreeMap;
 
 use move_model::{
-    builder::module_builder::ModuleBuilder,
-    model::{ModuleId, GlobalEnv}
+    builder::{
+        module_builder::ModuleBuilder,
+        model_builder::ModelBuilder,
+    },
+    model::{ModuleId, GlobalEnv},
+    ast::ModuleName,
+    run_spec_simplifier
 };
 
 use move_bytecode_source_map::{
@@ -84,24 +89,27 @@ pub fn run_spec_checker(env: &mut GlobalEnv, compiled_module: &F::CompiledModule
                 )
             );
 
-            let module_ident = E::ModuleIdent_{
-                address: module_address,
-                module: P::ModuleName(
-                    Spanned::unsafe_no_loc(
-                        Symbol::from(module_identifier.as_str())
+            let module_ident = Spanned::unsafe_no_loc(
+                E::ModuleIdent_{
+                    address: module_address,
+                    module: P::ModuleName(
+                        Spanned::unsafe_no_loc(
+                            Symbol::from(module_identifier.as_str())
+                        )
                     )
-                )
-            };
+                }
+            );
 
             let source_map = expansion_deriver
                 .source_mapper
-                .source_map;
+                .source_map
+                .clone();
 
             // Function Infos
-            let function_infos: UniqueMap<P::FunctionName, FunctionInfo> = UniqueMap::new();
+            let mut function_infos: UniqueMap<P::FunctionName, FunctionInfo> = UniqueMap::new();
 
             for (loc, symbol, _) in expanded_module.functions.iter() {
-                function_infos.add(
+                if let Err(_) = function_infos.add(
                     P::FunctionName(
                         sp(loc, symbol.clone())
                     ),
@@ -110,7 +118,9 @@ pub fn run_spec_checker(env: &mut GlobalEnv, compiled_module: &F::CompiledModule
                         parameters: vec![],
                         attributes: UniqueMap::new(),
                     }
-                );
+                ) {
+                    return Err(anyhow!("Failed field insertion into map."));
+                };
             }
 
             (
@@ -132,9 +142,11 @@ pub fn run_spec_checker(env: &mut GlobalEnv, compiled_module: &F::CompiledModule
         function_infos
     ) = module;
 
-    let loc = builder.to_loc(deriver.source_mapper.definition_location);
+    let mut builder = ModelBuilder::new(env);
+
+    let loc = builder.to_loc(&expansion_deriver.source_mapper.source_map.definition_location);
     let addr_bytes = builder.resolve_address(&loc, &module_ident.value.address);
-    let module_name = P::ModuleName::from_address_bytes_and_name(
+    let module_name = ModuleName::from_address_bytes_and_name(
         addr_bytes,
         builder
             .env
@@ -148,7 +160,7 @@ pub fn run_spec_checker(env: &mut GlobalEnv, compiled_module: &F::CompiledModule
     module_translator.translate(
         loc,
         expanded_module,
-        compiled_module,
+        compiled_module.clone(),
         source_map,
         function_infos,
     );
