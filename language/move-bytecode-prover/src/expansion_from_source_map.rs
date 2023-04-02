@@ -95,6 +95,8 @@ impl<'a> Deriver<'a> {
     // Derivers
     //***************************************************************************
 
+    // TODO: Ensure Locs come from the source map where we can
+
     // pub struct ModuleDefinition {
     //     // package name metadata from compiler arguments, not used for any language rules
     //     pub package_name: Option<Symbol>,
@@ -113,7 +115,8 @@ impl<'a> Deriver<'a> {
     //     pub specs: Vec<SpecBlock>,
     // }
 
-    // TODO: Return script as E::Script in a 
+    // NOTE: We're not going to create an E::Program since we're dealing with
+    // single modules / scripts here.
 
     pub fn derive(&self) -> Result<Derived> {
 
@@ -128,7 +131,10 @@ impl<'a> Deriver<'a> {
         let mut structs = UniqueMap::new();
 
         for (struct_name, struct_def) in vec_structs {
-            structs.add(struct_name, struct_def);
+            if let Err(_) = structs.add(struct_name, struct_def) {
+                panic!("Failed field insertion into field map.");
+            }
+
         }
 
         let vec_functions = match self.source_mapper.bytecode {
@@ -172,7 +178,9 @@ impl<'a> Deriver<'a> {
         let mut functions = UniqueMap::new();
 
         for (function_name, function_def) in vec_functions {
-            functions.add(function_name, function_def);
+            if let Err(_) = functions.add(function_name, function_def) {
+                panic!("Failed field insertion into field map.");
+            }
         }
 
         Ok(
@@ -187,7 +195,7 @@ impl<'a> Deriver<'a> {
                         E::Script {
                             package_name: None,
                             attributes: UniqueMap::new(),
-                            loc: no_loc(),
+                            loc: self.source_mapper.source_map.definition_location,
                             immediate_neighbors: UniqueMap::new(),
                             used_addresses: self.derive_addresses()?,
                             constants: self.derive_constants()?,
@@ -838,7 +846,7 @@ impl<'a> Deriver<'a> {
 
 }
 
-fn no_loc() -> Loc {
+pub fn no_loc() -> Loc {
     Loc::new(FileHash::empty(), 0, 0)
 }
 

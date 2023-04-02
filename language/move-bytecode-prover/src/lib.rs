@@ -1,6 +1,7 @@
 // pub mod converter;
 pub mod expansion_from_source_map;
 pub mod values_impl;
+pub mod bytecode_model_builder_with_specs;
 // #![forbid(unsafe_code)]
 
 // use crate::cli::Options;

@@ -13,6 +13,7 @@ move-binary-format = { path = "../move-binary-format" }
 move-symbol-pool = { path = "../move-symbol-pool" }
 move-core-types = { path = "../move-core/types", features = ["address32"] }
 move-bytecode-source-map = { path = "../move-ir-compiler/move-bytecode-source-map" }
+move-model = { path = "../move-model" }
 bcs = "0.1.5"
 anyhow = "1.0.70"
 serde = "1.0.159"
