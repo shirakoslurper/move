@@ -52,7 +52,6 @@ use crate::expansion_from_source_map::*;
 //     specs: impl IntoIterator<Item = &'a Spec>
 // ) {
 
-
 // }
 
 pub fn run_spec_checker(env: &mut GlobalEnv, compiled_module: &F::CompiledModule) -> Result<()> {
@@ -65,6 +64,11 @@ pub fn run_spec_checker(env: &mut GlobalEnv, compiled_module: &F::CompiledModule
 
     let module = match expansion_deriver.derive()? {
         Derived::Module(expanded_module) => {
+
+            /////////////////////////////////////////////
+            // TODO: Merge Specs into ModuleDefinition //
+            /////////////////////////////////////////////
+
             let module_handle = expansion_deriver
                 .source_mapper
                 .bytecode
