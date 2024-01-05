@@ -1,0 +1,1 @@
+Takes `parser::SpecBlocks` and converts them to `expansion::SpecBlocks`

@@ -1,0 +1,1 @@
+`run_bytecode_model_builder` rederives `parser::ast::ModuleName` from `CompiledModule`. Rederivation *is* possible, at least for some elements.

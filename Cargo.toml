@@ -25,6 +25,7 @@ members = [
     "language/move-bytecode-verifier/fuzz",
     "language/move-bytecode-verifier/invalid-mutations",
     "language/move-bytecode-verifier/transactional-tests",
+    "language/move-bytecode-prover",
     "language/move-command-line-common",
     "language/move-compiler",
     "language/move-compiler/transactional-tests",

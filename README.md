@@ -1,3 +1,40 @@
+### notes:
+
+> To preface, this was not a successful project owing to my lack of domain knowledge concerning what I was attempting to achieve.
+
+While some ways of making money on-chain are known and oft exploited, like arbitrage or liquidations, there are other ways that have yet to be discovered. These can range from exploiting contract vulnerabilities to stranger opportunities on contracts people would never consider.
+
+Mmm. Any security researcher would probably be cocking their head at this. Hmm, this sounds familiar. Hey wait a minute can't we just... YES.
+
+Yes, you can use vulnerability scanning and verification tools to find these opportunities. Set the pre-conditions to what the chain reflects at the moment. Set the post-conditions to the opposite of what you want, say "new balance <= old balance" and let the tools find counterexamples.
+
+Here's the earliest example I could find of this being done: [How to steal Ethers: scanning for vulnerable contracts](https://www.palkeo.com/en/projets/ethereum/stealing_ether.html).
+
+> This utilizes a unique vulnerability scanning tool (Pakala) built by the author that it allows for the stacking of calls. So, if a sequence of calls is required to advance the state to a place where we can get money out, it can generate it.
+
+Issue is, that this is easier said than done. The above example scans only for the most basic of vulnerabilities. And it takes a hot minute of compute.
+
+When I ran across this stuff, I remembered my days of exploring the possibilities of MEV on Aptos. It was a brief snippet about Move, the smart contract language of the chain, being easy to verify.
+
+> Do to limitations of the SDK (how we could interact with the chain) and other things, I decided against pursuing MEV on Aptos originally.
+
+Wow. Perfect.
+
+> Not really. Besides what I would eventually realize, the chain was too new to even have many long-tail, weird opportunities worth exploiting.
+
+I thought that it would be as simple as downloading the contract bytecode and using the Move verifier. Except it wasn't. The programs are usually written with a spec (for verification) then compiled. I've got all the particulars in my notes, but in short, if we wanted to add a spec AFTER compilation we would have to backtrack a couple compilatilation steps. Thankfully there was a dissassembler available but getting everything back into AST was something I had to take care of.
+
+And then when playing around with Dafny, a verification aware programming language, that uses Boogie in the backend same as with the Move verifier I realized an issue. I wanted to see if I could use the same principles as for Symbolic MEV to generate sequences of gene mutations to get from one gene to another. But despite everything I tried I was failing all of my test cases. I was getting spurious counterexamples. 
+
+After a bit of research I learned that this was probably due to the incompleteness of SMT solvers and with the "axiomatization of several data structures inclusing sequences" to be incomplete. Ah. How sad.
+
+The genome problem was a very simple test case the tool I was meaning to use could not deal with. So after finishing the bytecode to AST tool I dropped everything.
+
+But I did get a peek into the Move compiler and that was cool. And I got humbled (happens often), which was cooler.
+
+The bulk of the work I did is in `language/move-bytecode-prover`.
+
+All my notes (that I could find) are in `bytecode-prover-notes`.
 
 [![License](https://img.shields.io/badge/license-Apache-green.svg)](LICENSE)
 [![Discord chat](https://img.shields.io/discord/903339070925721652.svg?logo=discord&style=flat-square)](https://discord.gg/M95qX3KnG8)

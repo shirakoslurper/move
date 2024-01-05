@@ -1,0 +1,1 @@
+We may need to write our own version of `run_spec_checker()` that doesn't take a whole `AnnotatedModule` unless we intend to contruct a minimal one ans pass it to `run_spec_checker()`.
