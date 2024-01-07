@@ -16,7 +16,7 @@ Issue is, that this is easier said than done. The above example scans only for t
 
 When I ran across this stuff, I remembered my days of exploring the possibilities of MEV on Aptos. It was a brief snippet about Move, the smart contract language of the chain, being easy to verify.
 
-> Do to limitations of the SDK (how we could interact with the chain) and other things, I decided against pursuing MEV on Aptos originally.
+> Due to limitations of the SDK (how we could interact with the chain) and other things, I decided against pursuing MEV on Aptos originally.
 
 Wow. Perfect.
 
@@ -29,6 +29,8 @@ And then when playing around with Dafny, a verification aware programming langua
 After a bit of research I learned that this was probably due to the incompleteness of SMT solvers and with the "axiomatization of several data structures inclusing sequences" to be incomplete. Ah. How sad.
 
 The genome problem was a very simple test case the tool I was meaning to use could not deal with. So after finishing the bytecode to AST tool I dropped everything.
+
+> There were also a bunch of other glaring problems. How specific and correct the specs had to be. How the verifier assumed the correctness of the specs of callee functions. The difficulty of writing proper loop invariants. How functions are verified individually. The difficulty of "stacking outcomes" (I thought the equivalent for a deductive verifier would be working backwards, but it's not that simple). And here I assumed that a lot of this already was or could be automated. But that itself is a hard problem I do not have the skillset to solve. But even if I had, I would've run into the limitations of the underlying verification tool.
 
 But I did get a peek into the Move compiler and that was cool. And I got humbled (happens often), which was cooler.
 
