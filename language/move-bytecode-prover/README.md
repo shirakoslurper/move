@@ -12,8 +12,6 @@ However, many, if not most, of the contracts on Move chains are closed source, m
 
 The Move Prover is not meant to work with bytecode. It translates the source code and accompanying specifications into a prover object model then a Boogie representation of that model, which is what is verified, *during* compilation. Specifications, like the invariants we would like to check, cannot be applied to bytecode.
 
-![](move-prover-steps.png)
-
 This makes it difficult to use the prover to verify on-chain contracts. Besides making it difficult for end user's to verify the behaviors of the contracts they are interacting with, it also makes it difficult to use the prover to solve for executions that would yield a desired outcome.
 
 > For an example of a verification tool that works with bytecode (EVM not Move), see [Pakala](https://github.com/palkeo/pakala/tree/master). For an example of using the prover to solve for executions that yield a desired outcome, see [this use of Pakala to automate the exploiting of contracts for profit](https://www.palkeo.com/en/projets/ethereum/stealing_ether.html).
